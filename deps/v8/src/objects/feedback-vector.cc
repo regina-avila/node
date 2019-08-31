@@ -245,7 +245,8 @@ Handle<FeedbackVector> FeedbackVector::New(
           FLAG_log_function_events ? OptimizationMarker::kLogFirstExecution
                                    : OptimizationMarker::kNone)));
   DCHECK_EQ(vector->invocation_count(), 0);
-  DCHECK_EQ(vector->profiler_ticks(), 0);
+  DCHECK_EQ(vector->profiler_ticks_since_last_feedback_change(), 0);
+  DCHECK_EQ(vector->total_profiler_ticks(), 0);
 
   // Ensure we can skip the write barrier
   Handle<Object> uninitialized_sentinel = UninitializedSentinel(isolate);
@@ -887,8 +888,7 @@ float FeedbackNexus::ComputeCallFrequency() {
 
   double const invocation_count = vector().invocation_count();
   double const call_count = GetCallCount();
-  if (invocation_count == 0) {
-    // Prevent division by 0.
+  if (invocation_count == 0.0) {  // Prevent division by 0.
     return 0.0f;
   }
   return static_cast<float>(call_count / invocation_count);
@@ -1094,6 +1094,12 @@ Name FeedbackNexus::GetName() const {
       return Name::cast(feedback->GetHeapObjectAssumeStrong());
     }
   }
+  if (IsStoreDataPropertyInLiteralKind(kind())) {
+    MaybeObject extra = GetFeedbackExtra();
+    if (IsPropertyNameFeedback(extra)) {
+      return Name::cast(extra->GetHeapObjectAssumeStrong());
+    }
+  }
   return Name();
 }
 
@@ -1180,7 +1186,8 @@ KeyedAccessStoreMode KeyedAccessStoreModeForBuiltin(int builtin_index) {
 }  // namespace
 
 KeyedAccessStoreMode FeedbackNexus::GetKeyedAccessStoreMode() const {
-  DCHECK(IsKeyedStoreICKind(kind()) || IsStoreInArrayLiteralICKind(kind()));
+  DCHECK(IsKeyedStoreICKind(kind()) || IsStoreInArrayLiteralICKind(kind()) ||
+         IsStoreDataPropertyInLiteralKind(kind()));
   KeyedAccessStoreMode mode = STANDARD_STORE;
   MapHandles maps;
   MaybeObjectHandles handlers;
@@ -1220,14 +1227,17 @@ KeyedAccessStoreMode FeedbackNexus::GetKeyedAccessStoreMode() const {
 
 IcCheckType FeedbackNexus::GetKeyType() const {
   DCHECK(IsKeyedStoreICKind(kind()) || IsKeyedLoadICKind(kind()) ||
-         IsStoreInArrayLiteralICKind(kind()) || IsKeyedHasICKind(kind()));
+         IsStoreInArrayLiteralICKind(kind()) || IsKeyedHasICKind(kind()) ||
+         IsStoreDataPropertyInLiteralKind(kind()));
   MaybeObject feedback = GetFeedback();
   if (feedback == MaybeObject::FromObject(
                       *FeedbackVector::MegamorphicSentinel(GetIsolate()))) {
     return static_cast<IcCheckType>(
         Smi::ToInt(GetFeedbackExtra()->cast<Object>()));
   }
-  return IsPropertyNameFeedback(feedback) ? PROPERTY : ELEMENT;
+  MaybeObject maybe_name =
+      IsStoreDataPropertyInLiteralKind(kind()) ? GetFeedbackExtra() : feedback;
+  return IsPropertyNameFeedback(maybe_name) ? PROPERTY : ELEMENT;
 }
 
 BinaryOperationHint FeedbackNexus::GetBinaryOperationFeedback() const {
